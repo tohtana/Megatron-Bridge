@@ -257,7 +257,17 @@ def train_loop(config: Dict[str, Any]) -> None:
             - learning_rate: Learning rate
             - megatron_bridge_src: Path to Megatron-Bridge src directory
             - megatron_lm_root: Path to Megatron-LM root directory
+            - nemo_datasets_cache: Path for dataset caching (for multi-node)
     """
+    # CRITICAL: Set NEMO_DATASETS_CACHE for multi-node compatibility
+    # In multi-node setups, the default ~/.cache/nemo/datasets is local to each node
+    # This causes race conditions when workers on different nodes try to access
+    # dataset index files. Setting this to shared storage solves the issue.
+    nemo_datasets_cache = config.get("nemo_datasets_cache")
+    if nemo_datasets_cache:
+        os.environ["NEMO_DATASETS_CACHE"] = nemo_datasets_cache
+        os.environ["NEMO_HOME"] = os.path.dirname(nemo_datasets_cache)
+
     # Add Megatron-LM and Megatron-Bridge to Python path for workers
     megatron_lm_root = config.get("megatron_lm_root")
     if megatron_lm_root and megatron_lm_root not in sys.path:
@@ -275,7 +285,6 @@ def train_loop(config: Dict[str, Any]) -> None:
     ctx = ray.train.get_context()
     world_rank = ctx.get_world_rank()
     world_size = ctx.get_world_size()
-    local_rank = ctx.get_local_rank()
 
     if world_rank == 0:
         logger.info(f"Starting Megatron-Bridge training with {world_size} workers")
@@ -291,6 +300,7 @@ def train_loop(config: Dict[str, Any]) -> None:
     # skips its internal barrier when dist is already initialized. This can cause
     # rank desynchronization during parallel_state.initialize_model_parallel().
     import torch.distributed as dist
+
     if dist.is_initialized():
         if world_rank == 0:
             logger.info("Synchronizing all workers before Megatron initialization...")
@@ -370,6 +380,10 @@ def main():
     )
 
     # Training loop configuration
+    # Set NEMO_DATASETS_CACHE on shared storage for multi-node compatibility
+    nemo_datasets_cache = os.path.join(args.storage_path, ".cache", "nemo", "datasets")
+    print(f"Dataset cache path (shared): {nemo_datasets_cache}")
+
     train_loop_config = {
         "hf_model_path": args.hf_model_path,
         "output_dir": args.output_dir,
@@ -384,6 +398,7 @@ def main():
         "save_interval": args.save_interval,
         "megatron_bridge_src": _MEGATRON_BRIDGE_SRC,  # Path for workers
         "megatron_lm_root": _MEGATRON_LM_ROOT,  # Megatron-LM path for workers
+        "nemo_datasets_cache": nemo_datasets_cache,  # Shared storage for multi-node
     }
 
     # Experiment name

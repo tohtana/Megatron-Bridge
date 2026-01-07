@@ -348,9 +348,24 @@ The `jobs/` directory contains:
 
 ### Known Issues
 
-#### Anyscale Jobs vs Workspaces
+#### Multi-Node Dataset Caching
 
-Training works reliably in Anyscale workspaces but may fail when submitted as Anyscale jobs due to differences in how process groups are initialized. Use the workspace approach for reliable operation.
+**Problem**: In multi-node setups (e.g., 2 worker nodes with 4 GPUs each), the default dataset cache directory (`~/.cache/nemo/datasets`) is local to each node. When workers on different nodes try to build or access dataset index files concurrently, a race condition occurs:
+- Worker on node A may be building the index files
+- Worker on node B tries to load the same files (which don't exist on node B's local filesystem)
+- Result: `ValueError: Memory Map for .../validation.jsonl is not found`
+
+**Solution**: The training script automatically sets `NEMO_DATASETS_CACHE` to shared storage (`{storage_path}/.cache/nemo/datasets`). This ensures all workers across all nodes access the same dataset files.
+
+The key code in `train_loop()`:
+```python
+# CRITICAL: Set NEMO_DATASETS_CACHE for multi-node compatibility
+nemo_datasets_cache = config.get("nemo_datasets_cache")
+if nemo_datasets_cache:
+    os.environ["NEMO_DATASETS_CACHE"] = nemo_datasets_cache
+```
+
+**Note**: This issue does not occur in single-node setups where all workers share the same local filesystem.
 
 #### DDP Configuration
 
