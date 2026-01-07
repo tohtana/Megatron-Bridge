@@ -20,9 +20,8 @@ requirements: jobs/requirements.txt
 
 env_vars:
   RAY_TRAIN_V2_ENABLED: "1"
-  HF_HOME: /mnt/cluster_storage/huggingface
   PYTHONPATH: "./src:./3rdparty/Megatron-LM"
-  NCCL_DEBUG: "INFO"
+  NCCL_DEBUG: "WARN"
   PYTHONUNBUFFERED: "1"
 
 entrypoint: >-

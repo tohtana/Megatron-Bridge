@@ -369,7 +369,7 @@ if nemo_datasets_cache:
 
 #### DDP Configuration
 
-The training script disables certain DDP features that require NCCL coalesced operations not supported with Ray Train's process group initialization:
+The training script disables certain DDP features that require NCCL coalesced operations not supported with the PyTorch verion available in the base image:
 - `overlap_grad_reduce=False`
 - `overlap_param_gather=False`
 
