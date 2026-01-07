@@ -54,8 +54,13 @@ from typing import Any, Dict
 os.environ["RAY_TRAIN_V2_ENABLED"] = "1"
 
 # Get Megatron-Bridge and Megatron-LM paths for workers
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_MEGATRON_BRIDGE_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
+# When running as a Ray job with working_dir sync, MEGATRON_BRIDGE_ROOT env var should be set
+# Otherwise, compute paths relative to script location
+_MEGATRON_BRIDGE_ROOT = os.environ.get("MEGATRON_BRIDGE_ROOT")
+if _MEGATRON_BRIDGE_ROOT is None:
+    _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    _MEGATRON_BRIDGE_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
+
 _MEGATRON_BRIDGE_SRC = os.path.join(_MEGATRON_BRIDGE_ROOT, "src")
 # Use bundled Megatron-LM from 3rdparty (has correct version for Megatron-Bridge)
 _MEGATRON_LM_ROOT = os.path.join(_MEGATRON_BRIDGE_ROOT, "3rdparty", "Megatron-LM")
@@ -172,17 +177,19 @@ def create_megatron_config(
     )
 
     # DDP configuration
+    # Disable overlap features that require coalesced ops not supported with Ray Train's process groups
     ddp_cfg = DistributedDataParallelConfig(
         check_for_nan_in_grad=True,
         grad_reduce_in_fp32=True,
-        overlap_grad_reduce=True,
-        overlap_param_gather=True,
+        overlap_grad_reduce=False,  # Disable - requires NCCL coalesced ops
+        overlap_param_gather=False,  # Disable - requires NCCL coalesced ops
         average_in_collective=True,
     )
 
     # Distributed initialization config for Ray Train
     dist_cfg = DistributedInitConfig(
         external_gpu_device_mapping=True,  # Ray handles GPU assignment via CUDA_VISIBLE_DEVICES
+        use_gloo_process_groups=False,  # Disable Gloo groups - Ray Train handles this
     )
 
     # Logger configuration
@@ -279,7 +286,24 @@ def train_loop(config: Dict[str, Any]) -> None:
             f"DP={world_size // (config['tensor_parallel_size'] * config['pipeline_parallel_size'])}"
         )
 
+    # CRITICAL: Synchronize all workers before Megatron initialization
+    # Ray Train initializes torch.distributed, but Megatron's initialize_megatron()
+    # skips its internal barrier when dist is already initialized. This can cause
+    # rank desynchronization during parallel_state.initialize_model_parallel().
+    import torch.distributed as dist
+    if dist.is_initialized():
+        if world_rank == 0:
+            logger.info("Synchronizing all workers before Megatron initialization...")
+        dist.barrier()
+        if world_rank == 0:
+            logger.info(f"All {world_size} workers synchronized. Proceeding with initialization.")
+
     # Create Megatron-Bridge configuration
+    # Note: This involves HuggingFace model loading which may take different
+    # times on different ranks due to network/disk I/O variations
+    if world_rank == 0:
+        logger.info("Creating Megatron-Bridge configuration (loading HF model)...")
+
     megatron_config = create_megatron_config(
         hf_model_path=config["hf_model_path"],
         output_dir=config["output_dir"],
@@ -293,6 +317,17 @@ def train_loop(config: Dict[str, Any]) -> None:
         eval_interval=config.get("eval_interval", 100),
         save_interval=config.get("save_interval", 100),
     )
+
+    # CRITICAL: Synchronize all workers after config creation
+    # The HuggingFace model loading in create_megatron_config() can take different
+    # times on different ranks. Without this barrier, some ranks may start
+    # pretrain() while others are still loading, causing collective mismatches.
+    if dist.is_initialized():
+        if world_rank == 0:
+            logger.info("Config created. Synchronizing all workers before pretrain()...")
+        dist.barrier()
+        if world_rank == 0:
+            logger.info("All workers synchronized. Starting pretrain()...")
 
     # Run training using pretrain() directly
     # We bypass finetune() because it asserts pretrained_checkpoint is not None,
@@ -326,10 +361,12 @@ def main():
     print(f"Total workers: {args.num_workers}")
 
     # Ray Train scaling configuration
+    # Use PACK strategy to colocate workers on same nodes for efficient TP communication
     scaling_config = ScalingConfig(
         num_workers=args.num_workers,
         use_gpu=True,
         resources_per_worker={"GPU": 1},
+        placement_strategy="PACK",
     )
 
     # Training loop configuration

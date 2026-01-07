@@ -1,0 +1,21 @@
+# Anyscale Workspace configuration for Megatron-Bridge debugging
+# 8 GPUs: 2 worker nodes with 4 GPUs each (g6e.12xlarge)
+
+name: megatron-bridge-8gpu-debug-ws
+
+image_uri: anyscale/image/megatron-bridge-te:1
+
+compute_config:
+  head_node:
+    instance_type: m5.xlarge
+  worker_nodes:
+    - instance_type: g6e.12xlarge  # 4x L40S GPUs per node
+      min_nodes: 2
+      max_nodes: 2
+
+env_vars:
+  RAY_TRAIN_V2_ENABLED: "1"
+  HF_HOME: /mnt/cluster_storage/huggingface
+  PYTHONPATH: "./src:./3rdparty/Megatron-LM"
+  NCCL_DEBUG: "INFO"
+  PYTHONUNBUFFERED: "1"

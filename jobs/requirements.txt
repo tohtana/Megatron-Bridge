@@ -1,0 +1,2 @@
+# Empty requirements - all dependencies are pre-installed in the custom image
+# This file overrides workspace dependencies

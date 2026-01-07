@@ -253,6 +253,113 @@ Training finished. Result: Result(metrics=None, checkpoint=None, error=None,
     path='/mnt/local_storage/megatron_ray_1df88305', ...)
 ```
 
+## Anyscale Deployment
+
+This section covers running Megatron-Bridge with Ray Train on Anyscale cloud.
+
+### Custom Image with transformer_engine
+
+The training requires `transformer_engine` which takes a long time to install (can exceed default timeouts). A pre-built custom image is required.
+
+**Build the custom image:**
+
+```bash
+# From the Megatron-Bridge directory
+anyscale image build -f jobs/Containerfile --name megatron-bridge-te
+```
+
+The `jobs/Containerfile` includes:
+- Base: `anyscale/ray:2.53.0-py312-cu128`
+- Core dependencies: transformers, datasets, accelerate, etc.
+- NVIDIA packages: transformer_engine, nvidia-modelopt, nvidia-resiliency-ext
+
+### Workspace Setup (Recommended)
+
+Running in an Anyscale workspace is recommended for development and debugging. This approach provides interactive access and avoids job submission overhead.
+
+#### Step 1: Create the Workspace
+
+Use the workspace configuration:
+
+```bash
+anyscale workspace_v2 create -f jobs/workspace_8gpu.yaml
+```
+
+Or create manually via the Anyscale console with:
+- **Image**: `anyscale/image/megatron-bridge-te:1` (or your custom image)
+- **Head node**: `m5.xlarge` (CPU-only, for coordination)
+- **Worker nodes**: `g6e.12xlarge` (4x L40S GPUs per node)
+  - For 4 GPU: 1 worker node
+  - For 8 GPU: 2 worker nodes
+
+#### Step 2: Set Environment Variables
+
+In the workspace terminal, set the required environment variables:
+
+```bash
+export RAY_TRAIN_V2_ENABLED=1
+export HF_HOME=/mnt/cluster_storage/huggingface
+export PYTHONPATH='./src:./3rdparty/Megatron-LM'
+```
+
+Or add them to the workspace configuration under `env_vars`.
+
+#### Step 3: Run Training
+
+Navigate to the Megatron-Bridge directory and run:
+
+```bash
+cd ~/default  # or wherever Megatron-Bridge is located
+
+# 4 GPU test (TP2/PP2)
+PYTHONPATH='./src:./3rdparty/Megatron-LM' python scripts/training/finetune_decoder_ray.py \
+  --hf_model_path Qwen/Qwen2.5-0.5B \
+  --num_workers 4 \
+  --tensor_parallel_size 2 \
+  --pipeline_parallel_size 2 \
+  --train_iters 5 \
+  --global_batch_size 4 \
+  --micro_batch_size 1 \
+  --seq_length 512 \
+  --storage_path /mnt/cluster_storage/megatron_test
+
+# 8 GPU test (DP2/TP2/PP2)
+PYTHONPATH='./src:./3rdparty/Megatron-LM' python scripts/training/finetune_decoder_ray.py \
+  --hf_model_path Qwen/Qwen2.5-0.5B \
+  --num_workers 8 \
+  --tensor_parallel_size 2 \
+  --pipeline_parallel_size 2 \
+  --train_iters 5 \
+  --global_batch_size 8 \
+  --micro_batch_size 1 \
+  --seq_length 512 \
+  --storage_path /mnt/cluster_storage/megatron_test_8gpu
+```
+
+### Anyscale Configuration Files
+
+The `jobs/` directory contains:
+
+| File | Description |
+|------|-------------|
+| `Containerfile` | Dockerfile for custom image with transformer_engine |
+| `workspace_8gpu.yaml` | Workspace configuration for 8 GPU setup |
+| `requirements.txt` | Empty file to override workspace dependencies |
+
+### Known Issues
+
+#### Anyscale Jobs vs Workspaces
+
+Training works reliably in Anyscale workspaces but may fail when submitted as Anyscale jobs due to differences in how process groups are initialized. Use the workspace approach for reliable operation.
+
+#### DDP Configuration
+
+The training script disables certain DDP features that require NCCL coalesced operations not supported with Ray Train's process group initialization:
+- `overlap_grad_reduce=False`
+- `overlap_param_gather=False`
+
+This is handled automatically in `finetune_decoder_ray.py`.
+
 ## References
 
 - [Ray Train Documentation](https://docs.ray.io/en/latest/train/train.html)
