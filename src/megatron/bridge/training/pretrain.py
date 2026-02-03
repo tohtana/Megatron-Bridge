@@ -15,7 +15,12 @@
 from typing import Optional
 
 import torch.distributed as dist
-from nvidia_resiliency_ext.inprocess import CallWrapper
+try:
+    from nvidia_resiliency_ext.inprocess import CallWrapper
+    _HAS_NVIDIA_RESILIENCY = True
+except ModuleNotFoundError:
+    CallWrapper = None
+    _HAS_NVIDIA_RESILIENCY = False
 
 from megatron.bridge.data.utils import get_dataset_provider
 from megatron.bridge.training.checkpointing import save_checkpoint
@@ -68,6 +73,11 @@ def pretrain(
     state.cfg = config
 
     if config.inprocess_restart and config.inprocess_restart.enabled:
+        if not _HAS_NVIDIA_RESILIENCY:
+            raise ModuleNotFoundError(
+                "In-process restart requires 'nvidia-resiliency-ext'. "
+                "Install it or disable config.inprocess_restart."
+            )
         if dist.is_initialized():
             raise RuntimeError(
                 "In-process restart is incompatible with user-initialized process groups. "

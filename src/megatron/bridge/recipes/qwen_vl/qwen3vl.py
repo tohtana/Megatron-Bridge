@@ -38,6 +38,7 @@ from megatron.bridge.training.config import (
     TrainingConfig,
 )
 from megatron.bridge.training.mixed_precision import MixedPrecisionConfig
+from megatron.bridge.models.hf_pretrained.safe_config_loader import safe_load_config_with_retry
 
 
 class Qwen3VLCommonKwargs(TypedDict, total=False):
@@ -183,8 +184,9 @@ def _qwen3_vl_common(
     checkpoint_dir = os.path.join(run_output_dir, "checkpoints")
     tensorboard_dir = os.path.join(run_output_dir, "tb_logs")
 
-    # Build provider via AutoBridge and set parallel/seq params here
-    bridge = AutoBridge.from_hf_pretrained(hf_path)
+    # Build provider via HF config only to avoid downloading full weights.
+    hf_config = safe_load_config_with_retry(hf_path)
+    bridge = AutoBridge.from_hf_config(hf_config)
     model_cfg = bridge.to_megatron_provider(load_weights=False)
     model_cfg.tensor_model_parallel_size = tensor_parallelism
     model_cfg.pipeline_model_parallel_size = pipeline_parallelism

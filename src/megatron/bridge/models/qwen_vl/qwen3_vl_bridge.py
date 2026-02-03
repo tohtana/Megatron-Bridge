@@ -17,6 +17,7 @@ from typing import Dict, Union
 import torch
 import torch.nn as nn
 from transformers import Qwen3VLForConditionalGeneration, Qwen3VLMoeForConditionalGeneration
+from transformers.configuration_utils import PretrainedConfig
 
 from megatron.bridge.models.conversion.mapping_registry import MegatronMappingRegistry
 from megatron.bridge.models.conversion.model_bridge import MegatronModelBridge
@@ -64,7 +65,10 @@ class Qwen3VLBridge(MegatronModelBridge):
         Returns:
             Qwen3VLModelProvider configured with the HF model's parameters
         """
-        hf_config = hf_pretrained.config
+        if isinstance(hf_pretrained, PretrainedConfig):
+            hf_config = hf_pretrained
+        else:
+            hf_config = hf_pretrained.config
         text_config = hf_config.text_config
 
         # Get the model dtype from text config
@@ -95,7 +99,7 @@ class Qwen3VLBridge(MegatronModelBridge):
             fp16=(model_dtype == torch.float16),
             bf16=(model_dtype == torch.bfloat16),
             params_dtype=model_dtype,
-            generation_config=hf_pretrained.generation_config,
+            generation_config=getattr(hf_pretrained, "generation_config", None),
             # Qwen3 specific parameters
             add_qkv_bias=text_config.attention_bias,  # Qwen3 can have bias in QKV
             qk_layernorm=True,  # Qwen3 uses QK layernorm
@@ -111,7 +115,7 @@ class Qwen3VLBridge(MegatronModelBridge):
             image_token_id=getattr(hf_config, "image_token_id", 151655),
             video_token_id=getattr(hf_config, "video_token_id", 151656),
             # MRoPE configuration for multimodal position embeddings
-            mrope_section=text_config.rope_scaling.get("mrope_section", [24, 20, 20]),
+            mrope_section=(getattr(text_config, "rope_scaling", {}) or {}).get("mrope_section", [24, 20, 20]),
         )
 
         return provider
@@ -226,7 +230,10 @@ class Qwen3VLMoEBridge(MegatronModelBridge):
         Returns:
             Qwen3VLMoEModelProvider configured with the HF MoE model's parameters
         """
-        hf_config = hf_pretrained.config
+        if isinstance(hf_pretrained, PretrainedConfig):
+            hf_config = hf_pretrained
+        else:
+            hf_config = hf_pretrained.config
         text_config = hf_config.text_config
 
         # Get the model dtype from text config
@@ -256,7 +263,7 @@ class Qwen3VLMoEBridge(MegatronModelBridge):
             fp16=(model_dtype == torch.float16),
             bf16=(model_dtype == torch.bfloat16),
             params_dtype=model_dtype,
-            generation_config=hf_pretrained.generation_config,
+            generation_config=getattr(hf_pretrained, "generation_config", None),
             # Qwen3 specific parameters
             add_qkv_bias=text_config.attention_bias,  # Qwen3 can have bias in QKV
             qk_layernorm=True,  # Qwen3 uses QK layernorm

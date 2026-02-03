@@ -126,8 +126,13 @@ def get_train_valid_test_num_samples(cfg: ConfigContainer) -> tuple[int, int, in
         # Otherwise fallback to calculating samples based on iterations and global batch size
         train_samples = cfg.train.train_iters * cfg.train.global_batch_size
 
-    eval_iters = (cfg.train.train_iters // cfg.train.eval_interval + 1) * cfg.train.eval_iters
-    test_iters = cfg.train.eval_iters
+    if cfg.train.eval_interval is None or cfg.train.eval_interval <= 0 or cfg.train.eval_iters <= 0:
+        # Eval disabled; avoid division by zero and skip eval/test samples.
+        eval_iters = 0
+        test_iters = 0
+    else:
+        eval_iters = (cfg.train.train_iters // cfg.train.eval_interval + 1) * cfg.train.eval_iters
+        test_iters = cfg.train.eval_iters
 
     return (
         train_samples,

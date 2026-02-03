@@ -21,6 +21,7 @@ Reference: https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Instruct
 """
 
 from dataclasses import dataclass, field
+import inspect
 from typing import List, Optional
 
 from megatron.core.models.gpt import GPTModel as MCoreGPTModel
@@ -30,6 +31,12 @@ from transformers.models.qwen3_vl_moe.configuration_qwen3_vl_moe import Qwen3VLM
 
 from megatron.bridge.models import Qwen3ModelProvider, Qwen3MoEModelProvider
 from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model import Qwen3VLModel
+# Compatibility helper for differing MCore signatures.
+def _get_te_layer_spec(**kwargs):
+    sig = inspect.signature(get_gpt_layer_with_transformer_engine_spec)
+    if "normalization" not in sig.parameters:
+        kwargs.pop("normalization", None)
+    return get_gpt_layer_with_transformer_engine_spec(**kwargs)
 
 
 @dataclass
@@ -115,7 +122,7 @@ class Qwen3VLModelProvider(Qwen3ModelProvider):
         hf_vision_config = self.vision_config
 
         # Spec for the Qwen3VLTransformerLayer
-        language_transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec(
+        language_transformer_layer_spec = _get_te_layer_spec(
             num_experts=None,
             moe_grouped_gemm=False,
             qk_layernorm=self.qk_layernorm,
@@ -272,7 +279,7 @@ class Qwen3VLMoEModelProvider(Qwen3MoEModelProvider):
         # vision_transformer_config = deepcopy(self)
         hf_config = self.vision_config
 
-        language_transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec(
+        language_transformer_layer_spec = _get_te_layer_spec(
             num_experts=self.num_moe_experts,
             moe_grouped_gemm=True,
             qk_layernorm=self.qk_layernorm,

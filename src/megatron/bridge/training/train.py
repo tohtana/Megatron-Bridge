@@ -39,7 +39,12 @@ from megatron.core.rerun_state_machine import RerunDataIterator, get_rerun_state
 from megatron.core.transformer import MegatronModule
 from megatron.core.transformer.cuda_graphs import TECudaGraphHelper
 from megatron.core.utils import check_param_hashes_across_dp_replicas, get_model_config
-from modelopt.torch.distill.plugins.megatron import get_tensor_shapes_adjust_fn_for_distillation
+try:
+    from modelopt.torch.distill.plugins.megatron import get_tensor_shapes_adjust_fn_for_distillation
+    _HAS_MODELOPT = True
+except ModuleNotFoundError:
+    get_tensor_shapes_adjust_fn_for_distillation = None
+    _HAS_MODELOPT = False
 
 from megatron.bridge.training import fault_tolerance
 from megatron.bridge.training.checkpointing import maybe_finalize_async_save, save_checkpoint
@@ -624,12 +629,15 @@ def train_step(
             )
 
         # [ModelOpt]: Pipeline-parallel Distillation stacks student and teacher tensors
-        adjust_tensor_shapes_fn = get_tensor_shapes_adjust_fn_for_distillation(
-            model,
-            seq_length=model_config.seq_length,
-            micro_batch_size=train_config.micro_batch_size,
-            decoder_seq_length=model_config.seq_length,
-        )
+        if _HAS_MODELOPT:
+            adjust_tensor_shapes_fn = get_tensor_shapes_adjust_fn_for_distillation(
+                model,
+                seq_length=model_config.seq_length,
+                micro_batch_size=train_config.micro_batch_size,
+                decoder_seq_length=model_config.seq_length,
+            )
+        else:
+            adjust_tensor_shapes_fn = None
 
         losses_reduced = forward_backward_func(
             forward_step_func=forward_step_func,

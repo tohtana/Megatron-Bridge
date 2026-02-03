@@ -47,11 +47,18 @@ from megatron.core.optimizer import DistributedOptimizer, MegatronOptimizer
 from megatron.core.rerun_state_machine import get_rerun_state_machine
 from megatron.core.transformer import MegatronModule
 from megatron.core.utils import get_torch_version, is_torch_min_version, unwrap_model
-from modelopt.torch.opt.plugins import (
-    restore_modelopt_state,
-    save_modelopt_state,
-    save_sharded_modelopt_state,
-)
+try:
+    from modelopt.torch.opt.plugins import (
+        restore_modelopt_state,
+        save_modelopt_state,
+        save_sharded_modelopt_state,
+    )
+    _HAS_MODELOPT = True
+except ModuleNotFoundError:
+    restore_modelopt_state = None
+    save_modelopt_state = None
+    save_sharded_modelopt_state = None
+    _HAS_MODELOPT = False
 
 from megatron.bridge.peft.base import PEFT
 from megatron.bridge.training import fault_tolerance
@@ -611,13 +618,19 @@ def save_checkpoint(
                 content_metadata=sharded_sd_metadata,
             )
             # [ModelOpt]: save sharded modelopt_state
-            save_sharded_modelopt_state(model, checkpoint_name, (ckpt_cfg.ckpt_format, 1))
+            if _HAS_MODELOPT:
+                save_sharded_modelopt_state(model, checkpoint_name, (ckpt_cfg.ckpt_format, 1))
+            else:
+                print_rank_0("WARNING: Skipping modelopt state save; 'nvidia-modelopt' not installed.")
     else:
         # [ModelOpt]: Inject modelopt_state into state_dict
-        if ckpt_type == CheckpointType.LOCAL:
-            print_rank_0("WARNING: Local checkpointing does not support nvidia_modelopt.")
-        else:  # GLOBAL checkpoint type
-            save_modelopt_state(model, state_dict)
+        if _HAS_MODELOPT:
+            if ckpt_type == CheckpointType.LOCAL:
+                print_rank_0("WARNING: Local checkpointing does not support nvidia_modelopt.")
+            else:  # GLOBAL checkpoint type
+                save_modelopt_state(model, state_dict)
+        else:
+            print_rank_0("WARNING: Skipping modelopt state save; 'nvidia-modelopt' not installed.")
 
         end_ckpt = time()
         logger.debug(f"rank: {rank}, takes {end_ckpt - start_ckpt} to prepare state dict for ckpt ")
@@ -1169,7 +1182,8 @@ def _load_model_weights_from_checkpoint(
     model_sd_kwargs = dict(metadata=sharded_sd_metadata)
 
     # [ModelOpt]: Restore state
-    restore_modelopt_state(model, state_dict)
+    if _HAS_MODELOPT:
+        restore_modelopt_state(model, state_dict)
 
     model = unwrap_model(model)
     sharded_state_dict = _generate_model_state_dict(model, model_sd_kwargs)

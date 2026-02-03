@@ -19,8 +19,12 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
 
-import modelopt.torch.distill as mtd
-import modelopt.torch.distill.plugins.megatron as mtd_mcore
+try:
+    import modelopt.torch.distill as mtd
+    import modelopt.torch.distill.plugins.megatron as mtd_mcore
+except ModuleNotFoundError:
+    mtd = None
+    mtd_mcore = None
 import torch
 from megatron.core import parallel_state
 from megatron.core.models.gpt import GPTModel as MCoreGPTModel
@@ -335,6 +339,11 @@ class GPTDistillationProvider(GPTModelProvider):
         """
         if vp_stage is not None:
             raise ValueError("ModelOpt KD currently does not support virtual-pipeline parallel.")
+        if mtd is None or mtd_mcore is None:
+            raise ModuleNotFoundError(
+                "ModelOpt distillation requires 'nvidia-modelopt[torch]'. "
+                "Install it or disable distillation features."
+            )
 
         student_model = super().provide(pre_process, post_process, vp_stage)
         teacher_model = self.teacher.provide(pre_process, post_process, vp_stage)
