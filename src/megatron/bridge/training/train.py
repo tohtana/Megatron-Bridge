@@ -24,7 +24,7 @@ import torch
 import torch.profiler
 from megatron.core import parallel_state
 from megatron.core.distributed import DistributedDataParallel as DDP
-from megatron.core.full_cuda_graph import FullCudaGraphWrapper
+from megatron.core.full_cuda_graph import FullCudaGraphWrapper, StaticBufferLoader
 from megatron.core.num_microbatches_calculator import (
     get_current_global_batch_size,
     get_current_running_global_batch_size,
@@ -56,6 +56,7 @@ from megatron.bridge.training.profiling import (
     handle_profiling_stop,
     initialize_pytorch_profiler,
     should_profile_rank,
+    stop_nsys_profiler,
 )
 from megatron.bridge.training.state import GlobalState
 from megatron.bridge.training.tensor_inspect import (
@@ -498,6 +499,15 @@ def train(
         )
         if should_exit:
             break
+
+    # Ensure profilers are stopped if training ended before profile_step_end.
+    if prof_config and should_profile_rank(prof_config, torch.distributed.get_rank()):
+        if prof_config.use_pytorch_profiler and prof is not None:
+            if global_state.train_state.step < prof_config.profile_step_end:
+                prof.stop()
+        if prof_config.use_nsys_profiler and nsys_nvtx_context is not None:
+            if global_state.train_state.step < prof_config.profile_step_end:
+                stop_nsys_profiler(nsys_nvtx_context)
 
     _delete_cuda_graphs(cuda_graph_helper)
 
@@ -1134,6 +1144,9 @@ def checkpoint_and_decide_exit(
 def _finish_train(global_state: GlobalState):
     ckpt_cfg = global_state.cfg.checkpoint
 
+    # Cleanup any CUDA graphs created during evaluation before teardown.
+    _delete_cuda_graphs(cuda_graph_helper=None)
+
     # Shutdown NVRx straggler detection if enabled
     safe_shutdown_nvrx_straggler_manager(global_state.nvrx_straggler_manager)
 
@@ -1229,7 +1242,7 @@ def _handle_mxfp8_param_buffer_copy(
                 optim_instance._copy_main_params_to_param_buffer()
 
 
-def _delete_cuda_graphs(cuda_graph_helper: TECudaGraphHelper):
+def _delete_cuda_graphs(cuda_graph_helper: Optional[TECudaGraphHelper]):
     """
     Delete the CUDA graph object as they hold a reference to the some of the nccl buffers, thus blocking the
     process-destory (torch.dist.destroy_process_group()) at the end of the training loop.
@@ -1243,10 +1256,18 @@ def _delete_cuda_graphs(cuda_graph_helper: TECudaGraphHelper):
 
     print_rank_0("Deleting CUDA graphs")
 
-    # Explicitly delete the training CUDA graph because of
+    # Explicitly delete any CUDA graphs because of
     # https://github.com/pytorch/pytorch/issues/115388#issuecomment-3009880966
-    if "training" in FullCudaGraphWrapper.cuda_graph:
-        del FullCudaGraphWrapper.cuda_graph["training"]
+    for stage in list(FullCudaGraphWrapper.cuda_graph.keys()):
+        if FullCudaGraphWrapper.cuda_graph.get(stage) is not None:
+            del FullCudaGraphWrapper.cuda_graph[stage]
+        FullCudaGraphWrapper.cuda_graph[stage] = None
+        FullCudaGraphWrapper.result[stage] = None
+        FullCudaGraphWrapper.curr_iteration[stage] = 0
+
+    # Release static buffers used for CUDA graph inputs.
+    for stage in list(StaticBufferLoader.static_buffers.keys()):
+        StaticBufferLoader.static_buffers[stage].clear()
 
     # Cleanup CUDA graphs object for partial Cuda-graphs (implemented in TransformerEngine)
     if cuda_graph_helper is not None:
@@ -1256,5 +1277,8 @@ def _delete_cuda_graphs(cuda_graph_helper: TECudaGraphHelper):
                     del cuda_graph
                 del layer.cuda_graphs
 
-    # Run GC to collect the freshed object
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+
+    # Run GC to collect the freed objects.
     gc.collect()
